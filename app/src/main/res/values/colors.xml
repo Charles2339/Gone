@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="gone_bg">#020818</color>
+    <color name="gone_cyan">#00E5FF</color>
+    <color name="gone_red">#FF3D00</color>
+    <color name="gone_yellow">#FFD600</color>
+    <color name="gone_purple">#7C4DFF</color>
+    <color name="gone_text_secondary">#B0BEC5</color>
+</resources>

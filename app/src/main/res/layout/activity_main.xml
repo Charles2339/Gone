@@ -1,0 +1,70 @@
+<?xml version="1.0" encoding="utf-8"?>
+<androidx.constraintlayout.widget.ConstraintLayout
+    xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="#020818">
+
+    <TextView
+        android:id="@+id/tvGameTitle"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="GONE"
+        android:textSize="72sp"
+        android:textColor="#00E5FF"
+        android:fontFamily="sans-serif-black"
+        android:letterSpacing="0.2"
+        app:layout_constraintTop_toTopOf="parent"
+        app:layout_constraintBottom_toTopOf="@id/tvSubtitle"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintVertical_chainStyle="packed"
+        app:layout_constraintVertical_bias="0.35"/>
+
+    <TextView
+        android:id="@+id/tvSubtitle"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="ENDLESS RUNNER"
+        android:textSize="16sp"
+        android:textColor="#B0BEC5"
+        android:letterSpacing="0.3"
+        app:layout_constraintTop_toBottomOf="@id/tvGameTitle"
+        app:layout_constraintBottom_toTopOf="@id/tvHighScore"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintEnd_toEndOf="parent"
+        android:layout_marginTop="4dp"/>
+
+    <TextView
+        android:id="@+id/tvHighScore"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="Best: 0m"
+        android:textSize="22sp"
+        android:textColor="#FFD600"
+        android:fontFamily="sans-serif-medium"
+        app:layout_constraintTop_toBottomOf="@id/tvSubtitle"
+        app:layout_constraintBottom_toTopOf="@id/btnPlay"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintEnd_toEndOf="parent"
+        android:layout_marginTop="24dp"/>
+
+    <Button
+        android:id="@+id/btnPlay"
+        android:layout_width="220dp"
+        android:layout_height="56dp"
+        android:text="PLAY"
+        android:textSize="20sp"
+        android:letterSpacing="0.15"
+        android:textColor="#020818"
+        android:backgroundTint="#00E5FF"
+        android:fontFamily="sans-serif-black"
+        app:layout_constraintTop_toBottomOf="@id/tvHighScore"
+        app:layout_constraintBottom_toBottomOf="parent"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintEnd_toEndOf="parent"
+        android:layout_marginTop="32dp"
+        android:layout_marginBottom="0dp"/>
+
+</androidx.constraintlayout.widget.ConstraintLayout>

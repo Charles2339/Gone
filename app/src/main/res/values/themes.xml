@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="Theme.Gone" parent="Theme.MaterialComponents.DayNight.NoActionBar">
+        <item name="colorPrimary">#00E5FF</item>
+        <item name="colorPrimaryVariant">#0097A7</item>
+        <item name="colorOnPrimary">#020818</item>
+        <item name="colorSecondary">#FF3D00</item>
+        <item name="colorOnSecondary">#FFFFFF</item>
+        <item name="android:statusBarColor">#020818</item>
+        <item name="android:navigationBarColor">#020818</item>
+        <item name="android:windowBackground">#020818</item>
+    </style>
+</resources>
