@@ -3,93 +3,88 @@ package com.gone.game
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
-import android.graphics.Path
 import android.graphics.RectF
-import kotlin.math.PI
 import kotlin.math.abs
+import kotlin.math.PI
 import kotlin.math.sin
-import kotlin.math.cos
-import kotlin.math.max
 
 enum class PlayerState { RUNNING, JUMPING, SLIDING, DEAD }
 
 class Player(private val screenW: Int, private val screenH: Int) {
 
-    val w = screenW * GameConstants.PLAYER_WIDTH_FRAC
-    val h = screenH * GameConstants.PLAYER_HEIGHT_FRAC
+    // ── Dimensions (everything derived from h, NOT w) ─────────────────────────
+    val h  = screenH * GameConstants.PLAYER_HEIGHT_FRAC
+    val w  = screenW * GameConstants.PLAYER_WIDTH_FRAC   // used only for hitbox x
     val groundY = screenH - screenH * GameConstants.GROUND_HEIGHT_FRAC
-    val x = screenW * GameConstants.PLAYER_X_FRAC
+    val x  = screenW * GameConstants.PLAYER_X_FRAC       // left edge of hitbox
 
-    var y = groundY - h
+    var y  = groundY - h
     var velY = 0f
     var state = PlayerState.RUNNING
 
-    // Double-jump
-    private var canDoubleJump = false
+    // Stickman proportions — all relative to h
+    private val headR    get() = h * 0.115f
+    private val neckY    get() = y + h * 0.24f    // where neck meets torso
+    private val shoulderY get() = y + h * 0.27f
+    private val hipY     get() = y + h * 0.54f
+    private val sw       = (h * 0.022f).coerceAtLeast(2.5f)  // thin stick lines
+    private val cx       get() = x + w / 2f       // horizontal centre
+
+    // Physics state
+    var canDoubleJump = false
+    var onPlatform    = false
+    var landSquash    = 0f
+
+    // Double-jump visual
     private var doubleJumpFlash = 0f
 
     // Slide
     private var slideTimer = 0L
 
-    // Smooth animation — continuous phase in radians
-    private var animPhase = 0f        // driven by dt every frame
-    private var landSquash = 0f       // 0..1 squash on landing
-
-    // ── Stroke sizes (scale with stickman size) ───────────────────────────────
-    private val sw = (w * 0.28f).coerceAtLeast(3f)   // main stroke width
+    // Smooth animation
+    private var animPhase = 0f
 
     // ── Paints ────────────────────────────────────────────────────────────────
-    private fun bodyPaint(alpha: Int = 255) = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+    private val mainPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         color = Color.parseColor("#00E5FF")
-        this.alpha = alpha
         strokeWidth = sw
-        style = Paint.Style.STROKE
-        strokeCap = Paint.Cap.ROUND
+        style  = Paint.Style.STROKE
+        strokeCap  = Paint.Cap.ROUND
         strokeJoin = Paint.Join.ROUND
     }
-
+    private fun dimPaint() = Paint(mainPaint).also { it.alpha = 100 }
     private val headFill = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Color.parseColor("#001A20")
-        style = Paint.Style.FILL
+        color = Color.parseColor("#001A20"); style = Paint.Style.FILL
     }
-    private val headStroke = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Color.parseColor("#00E5FF")
-        style = Paint.Style.STROKE
-        strokeWidth = sw
-    }
-    private val shadowPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Color.parseColor("#4400E5FF")
-        style = Paint.Style.FILL
+    private val headRim  = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = Color.parseColor("#00E5FF"); style = Paint.Style.STROKE; strokeWidth = sw
     }
     private val glowPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Color.parseColor("#2200E5FF")
-        style = Paint.Style.STROKE
-        strokeCap = Paint.Cap.ROUND
-        strokeJoin = Paint.Join.ROUND
+        color = Color.parseColor("#1800E5FF"); style = Paint.Style.STROKE
+        strokeCap = Paint.Cap.ROUND; strokeJoin = Paint.Join.ROUND
     }
-    private val doubleJumpRingPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        style = Paint.Style.STROKE
-        strokeWidth = sw * 1.4f
-        color = Color.parseColor("#FFD600")
+    private val shadowPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = Color.parseColor("#4400E5FF"); style = Paint.Style.FILL
+    }
+    private val burstPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.STROKE; strokeWidth = sw * 1.6f; color = Color.parseColor("#FFD600")
     }
     private val trailPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        style = Paint.Style.STROKE
-        strokeWidth = sw * 0.8f
-        strokeCap = Paint.Cap.ROUND
-        color = Color.parseColor("#FFD600")
+        style = Paint.Style.STROKE; strokeWidth = sw; strokeCap = Paint.Cap.ROUND
+        color = Color.parseColor("#CCFFD600")
     }
-    private val tokenDotPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Color.parseColor("#FFD600")
-        style = Paint.Style.FILL
+    private val dotPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = Color.parseColor("#FFD600"); style = Paint.Style.FILL
     }
 
-    // ── Actions ───────────────────────────────────────────────────────────────
+    // ── Input ─────────────────────────────────────────────────────────────────
 
     fun jump() {
         when {
-            state == PlayerState.RUNNING -> {
+            state == PlayerState.RUNNING || onPlatform -> {
                 velY = GameConstants.JUMP_VELOCITY
                 state = PlayerState.JUMPING
+                onPlatform = false
                 canDoubleJump = true
             }
             state == PlayerState.JUMPING && canDoubleJump -> {
@@ -101,7 +96,7 @@ class Player(private val screenW: Int, private val screenH: Int) {
     }
 
     fun slide() {
-        if (state == PlayerState.RUNNING) {
+        if (state == PlayerState.RUNNING || onPlatform) {
             state = PlayerState.SLIDING
             slideTimer = GameConstants.SLIDE_DURATION_MS
         }
@@ -114,266 +109,239 @@ class Player(private val screenW: Int, private val screenH: Int) {
 
         if (state == PlayerState.SLIDING) {
             slideTimer -= (dt * 1000).toLong()
-            if (slideTimer <= 0) state = PlayerState.RUNNING
+            if (slideTimer <= 0) { state = PlayerState.RUNNING; slideTimer = 0 }
         }
 
-        // Gravity
-        if (state == PlayerState.JUMPING || y < groundY - h - 1f) {
-            velY += GameConstants.GRAVITY * dt
-            y += velY * dt
-            if (y >= groundY - h) {
-                y = groundY - h
-                landSquash = 1f         // trigger squash on land
-                velY = 0f
-                canDoubleJump = false
-                state = if (slideTimer > 0) PlayerState.SLIDING else PlayerState.RUNNING
+        if (!onPlatform) {
+            if (state == PlayerState.JUMPING || y < groundY - h - 1f) {
+                velY += GameConstants.GRAVITY * dt
+                y   += velY * dt
+                if (y >= groundY - h) {
+                    y = groundY - h
+                    velY = 0f
+                    landSquash = 1f
+                    canDoubleJump = false
+                    state = if (slideTimer > 0) PlayerState.SLIDING else PlayerState.RUNNING
+                }
             }
         }
 
-        // Advance run animation phase smoothly
-        if (state == PlayerState.RUNNING || state == PlayerState.JUMPING) {
-            val freq = if (state == PlayerState.RUNNING) GameConstants.RUN_ANIM_FREQ else 1.2
-            animPhase = (animPhase + (freq * GameConstants.TWO_PI * dt).toFloat()) % GameConstants.TWO_PI
-        }
+        // Run anim: fast while on ground, slow gentle drift in air
+        val freq = if (state == PlayerState.JUMPING) 1.0 else GameConstants.RUN_ANIM_FREQ
+        animPhase = (animPhase + (freq * GameConstants.TWO_PI * dt).toFloat()) % GameConstants.TWO_PI
 
         if (doubleJumpFlash > 0f) doubleJumpFlash -= dt
-        if (landSquash > 0f) landSquash = (landSquash - dt * 6f).coerceAtLeast(0f)
+        if (landSquash > 0f)      landSquash = (landSquash - dt * 7f).coerceAtLeast(0f)
+    }
+
+    // Called by GameView when player's feet land on an obstacle top
+    fun landOn(obsTop: Float) {
+        if (state == PlayerState.DEAD) return
+        y     = obsTop - h
+        velY  = 0f
+        if (!onPlatform) landSquash = 0.8f   // one-shot squash on first contact
+        onPlatform    = true
+        canDoubleJump = false
+        if (state == PlayerState.JUMPING) state = PlayerState.RUNNING
     }
 
     // ── Hitbox ────────────────────────────────────────────────────────────────
 
     fun getHitbox(): RectF = if (state == PlayerState.SLIDING)
-        RectF(x + sw, groundY - h * 0.52f, x + w - sw, groundY)
+        RectF(x + sw, groundY - h * 0.50f, x + w - sw, groundY)
     else
-        RectF(x + sw, y + sw, x + w - sw, y + h - sw)
+        RectF(x + sw * 0.5f, y + headR * 0.3f, x + w - sw * 0.5f, y + h - sw)
 
     // ── Draw ──────────────────────────────────────────────────────────────────
 
     fun draw(canvas: Canvas) {
         if (state == PlayerState.DEAD) { drawDead(canvas); return }
-
-        val cx = x + w / 2f
-
-        // Double-jump burst effect
-        if (doubleJumpFlash > 0f) drawDoubleJumpEffect(canvas, cx)
-
+        if (doubleJumpFlash > 0f) drawBurst(canvas)
         when (state) {
-            PlayerState.SLIDING -> drawSlide(canvas, cx)
-            PlayerState.JUMPING -> drawAir(canvas, cx)
-            else                -> drawRun(canvas, cx)
+            PlayerState.SLIDING -> drawSlide(canvas)
+            PlayerState.JUMPING -> drawAir(canvas)
+            else                -> drawRun(canvas)
         }
-
-        drawShadow(canvas, cx)
-
-        // Double-jump available dot
+        drawShadow(canvas)
+        // Double-jump token dot
         if (state == PlayerState.JUMPING && canDoubleJump) {
-            val pulse = (sin(animPhase * 4f) * 0.3f + 1f).toFloat()
-            tokenDotPaint.alpha = 220
-            canvas.drawCircle(cx, y - w * 0.5f, w * 0.13f * pulse, tokenDotPaint)
+            val pulse = sin(animPhase * 5f) * 0.25f + 1f
+            canvas.drawCircle(cx, y - h * 0.10f, h * 0.045f * pulse, dotPaint)
         }
     }
 
-    // ── Running pose — smooth 2-segment limbs via sine ────────────────────────
+    // ── Running — smooth 2-segment limbs, all proportions from h ─────────────
 
-    private fun drawRun(canvas: Canvas, cx: Float) {
-        val s = sin(animPhase)          // -1..1 main swing
-        val k = sin(animPhase + PI / 3.5).toFloat()  // knee phase offset
+    private fun drawRun(canvas: Canvas) {
+        val s = sin(animPhase).toFloat()            // -1..1 leg swing
+        val kOff = sin(animPhase + PI.toFloat() / 3.5f).toFloat() // knee phase
 
-        val headR  = w * 0.28f
-        val headCy = y + headR * 1.0f
+        // Leg geometry
+        val thighLen   = h * 0.26f
+        val shinLen    = h * 0.26f
+        val legSwing   = h * 0.20f   // max horizontal spread
 
-        // Torso anchor points
-        val shoulderY = headCy + headR * 1.2f
-        val hipY      = y + h * 0.56f
+        // Hip
+        val hx = cx; val hy = hipY
 
-        // Torso lean forward slightly
-        val leanX = w * 0.04f
-
-        // ── Back limbs (dimmer, drawn first) ──────────────────────────────────
-        val dimPaint  = bodyPaint(110)
-        val dimGlow   = glowPaint.also { it.strokeWidth = sw * 2.2f; it.alpha = 30 }
-
-        val legH   = h * 0.44f
-        val legSpr = w * 0.30f
-        val armH   = h * 0.30f
-        val armSpr = w * 0.28f
+        // ── Back limbs (dim, drawn first) ─────────────────────────────────────
+        val dp = dimPaint()
 
         // Back leg
-        val bThighEx = cx + leanX - s.toFloat() * legSpr
-        val bThighEy = hipY + legH * 0.48f
-        val bKneeBend = (-k * legH * 0.18f).toFloat().coerceAtMost(0f)   // bend up when back
-        val bFootX  = bThighEx + s.toFloat() * legSpr * 0.35f
-        canvas.drawLine(cx + leanX, hipY, bThighEx, bThighEy + bKneeBend, dimPaint)
-        canvas.drawLine(bThighEx, bThighEy + bKneeBend, bFootX, groundY, dimPaint)
+        val bKneeX = hx - s * legSwing
+        val bKneeLift = (-kOff * thighLen * 0.14f).coerceAtMost(0f)
+        val bKneeY  = hy + thighLen + bKneeLift
+        val bFootX  = bKneeX + s * legSwing * 0.4f
+        val bFootY  = groundY
+        canvas.drawLine(hx, hy, bKneeX, bKneeY, dp)
+        canvas.drawLine(bKneeX, bKneeY, bFootX, bFootY, dp)
 
-        // Back arm
-        val bArmEx = cx + leanX + s.toFloat() * armSpr
-        val bArmEy = shoulderY + armH * 0.50f
-        val bForeX = bArmEx - s.toFloat() * armSpr * 0.40f
-        val bForeY = bArmEy + armH * 0.50f
-        canvas.drawLine(cx + leanX, shoulderY, bArmEx, bArmEy, dimPaint)
-        canvas.drawLine(bArmEx, bArmEy, bForeX, bForeY, dimPaint)
+        // Back arm (arms swing opposite to legs)
+        val armSwing = h * 0.18f
+        val armLen1  = h * 0.18f
+        val armLen2  = h * 0.14f
+        val bElbX = cx + s * armSwing
+        val bElbY = shoulderY + armLen1
+        val bHandX = bElbX - s * armSwing * 0.5f
+        val bHandY = bElbY + armLen2
+        canvas.drawLine(cx, shoulderY, bElbX, bElbY, dp)
+        canvas.drawLine(bElbX, bElbY, bHandX, bHandY, dp)
 
-        // ── Head ──────────────────────────────────────────────────────────────
-        // Bob with stride
-        val bobY = abs(sin(animPhase)).toFloat() * h * 0.025f
-        canvas.drawCircle(cx + leanX, headCy + bobY, headR, headFill)
-        canvas.drawCircle(cx + leanX, headCy + bobY, headR, headStroke)
-        // Tiny eye glint
-        val eyePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.parseColor("#00E5FF"); alpha = 180; style = Paint.Style.FILL }
-        canvas.drawCircle(cx + leanX + headR * 0.30f, headCy + bobY - headR * 0.10f, headR * 0.18f, eyePaint)
+        // ── Head (drawn between back/front layers) ────────────────────────────
+        val headCx = cx
+        val headCy = y + headR * 1.15f + abs(s) * h * 0.012f   // subtle bob
+        canvas.drawCircle(headCx, headCy, headR, headFill)
+        canvas.drawCircle(headCx, headCy, headR, headRim)
+        // Eye
+        val eyePaint = Paint(headRim).also { it.style = Paint.Style.FILL; it.alpha = 160 }
+        canvas.drawCircle(headCx + headR * 0.30f, headCy - headR * 0.12f, headR * 0.16f, eyePaint)
 
-        // ── Torso with glow ───────────────────────────────────────────────────
-        glowPaint.strokeWidth = sw * 2.5f; glowPaint.alpha = 25
-        canvas.drawLine(cx + leanX, shoulderY, cx + leanX, hipY, glowPaint)
-        canvas.drawLine(cx + leanX, shoulderY, cx + leanX, hipY, bodyPaint())
+        // ── Torso ─────────────────────────────────────────────────────────────
+        glowPaint.strokeWidth = sw * 2.8f; glowPaint.alpha = 30
+        canvas.drawLine(cx, neckY, cx, hipY, glowPaint)
+        canvas.drawLine(cx, neckY, cx, hipY, mainPaint)
 
         // ── Front leg ─────────────────────────────────────────────────────────
-        val fThighEx = cx + leanX + s.toFloat() * legSpr
-        val fThighEy = hipY + legH * 0.48f
-        val fKneeLift = (s.toFloat() * legH * 0.22f).coerceAtLeast(0f)   // knee lifts forward
-        val fFootX  = fThighEx - s.toFloat() * legSpr * 0.45f
-        val fFootY  = groundY - max(0f, s.toFloat() * legH * 0.25f)      // foot flick up
+        val fKneeX  = hx + s * legSwing
+        val fKneeLift = (s * thighLen * 0.22f).coerceAtLeast(0f)
+        val fKneeY  = hy + thighLen - fKneeLift
+        val fFootX  = fKneeX - s * legSwing * 0.45f
+        val fFootY  = (groundY - s * shinLen * 0.18f).coerceAtLeast(groundY - shinLen * 0.25f)
 
-        glowPaint.strokeWidth = sw * 2.2f; glowPaint.alpha = 28
-        canvas.drawLine(cx + leanX, hipY, fThighEx, fThighEy - fKneeLift, glowPaint)
-        canvas.drawLine(fThighEx, fThighEy - fKneeLift, fFootX, fFootY, glowPaint)
-        canvas.drawLine(cx + leanX, hipY, fThighEx, fThighEy - fKneeLift, bodyPaint())
-        canvas.drawLine(fThighEx, fThighEy - fKneeLift, fFootX, fFootY, bodyPaint())
+        glowPaint.strokeWidth = sw * 2.5f; glowPaint.alpha = 28
+        canvas.drawLine(hx, hy, fKneeX, fKneeY, glowPaint)
+        canvas.drawLine(fKneeX, fKneeY, fFootX, fFootY, glowPaint)
+        canvas.drawLine(hx, hy, fKneeX, fKneeY, mainPaint)
+        canvas.drawLine(fKneeX, fKneeY, fFootX, fFootY, mainPaint)
 
         // ── Front arm ─────────────────────────────────────────────────────────
-        val fArmEx = cx + leanX - s.toFloat() * armSpr     // opposite to leg
-        val fArmEy = shoulderY + armH * 0.50f
-        val fForeX = fArmEx + s.toFloat() * armSpr * 0.50f
-        val fForeY = fArmEy + armH * 0.50f
-        glowPaint.strokeWidth = sw * 2.2f; glowPaint.alpha = 28
-        canvas.drawLine(cx + leanX, shoulderY, fArmEx, fArmEy, glowPaint)
-        canvas.drawLine(fArmEx, fArmEy, fForeX, fForeY, glowPaint)
-        canvas.drawLine(cx + leanX, shoulderY, fArmEx, fArmEy, bodyPaint())
-        canvas.drawLine(fArmEx, fArmEy, fForeX, fForeY, bodyPaint())
+        val fElbX  = cx - s * armSwing
+        val fElbY  = shoulderY + armLen1
+        val fHandX = fElbX + s * armSwing * 0.5f
+        val fHandY = fElbY + armLen2
+
+        glowPaint.strokeWidth = sw * 2.5f; glowPaint.alpha = 28
+        canvas.drawLine(cx, shoulderY, fElbX, fElbY, glowPaint)
+        canvas.drawLine(fElbX, fElbY, fHandX, fHandY, glowPaint)
+        canvas.drawLine(cx, shoulderY, fElbX, fElbY, mainPaint)
+        canvas.drawLine(fElbX, fElbY, fHandX, fHandY, mainPaint)
     }
 
-    // ── Air pose — tuck ───────────────────────────────────────────────────────
+    // ── Air pose ──────────────────────────────────────────────────────────────
 
-    private fun drawAir(canvas: Canvas, cx: Float) {
-        val headR  = w * 0.28f
-        val headCy = y + headR * 1.0f
-        val shoulderY = headCy + headR * 1.2f
-        val hipY   = y + h * 0.54f
-        val leanX  = w * 0.06f
+    private fun drawAir(canvas: Canvas) {
+        val rising = velY < 0f
+        val tuck   = if (rising) 0.85f else 0.50f
 
-        // Rising or falling determines leg tuck vs. extension
-        val isRising = velY < 0f
-        val tuck = if (isRising) 0.80f else 0.40f  // how much legs are tucked
-
-        // Head
-        canvas.drawCircle(cx + leanX, headCy, headR, headFill)
-        canvas.drawCircle(cx + leanX, headCy, headR, headStroke)
+        val headCy = y + headR * 1.15f
+        canvas.drawCircle(cx, headCy, headR, headFill)
+        canvas.drawCircle(cx, headCy, headR, headRim)
 
         // Torso
-        canvas.drawLine(cx + leanX, shoulderY, cx + leanX, hipY, bodyPaint())
+        canvas.drawLine(cx, neckY, cx, hipY, mainPaint)
 
-        // Arms — spread wide for balance
-        canvas.drawLine(cx + leanX, shoulderY, cx + leanX - w * 0.50f, shoulderY + h * 0.05f, bodyPaint())
-        canvas.drawLine(cx + leanX, shoulderY, cx + leanX + w * 0.45f, shoulderY + h * 0.05f, bodyPaint())
-        // Forearms angle down
-        canvas.drawLine(cx + leanX - w * 0.50f, shoulderY + h * 0.05f,
-                        cx + leanX - w * 0.35f, shoulderY + h * 0.18f, bodyPaint())
-        canvas.drawLine(cx + leanX + w * 0.45f, shoulderY + h * 0.05f,
-                        cx + leanX + w * 0.32f, shoulderY + h * 0.18f, bodyPaint())
+        // Arms spread wide
+        val aw = h * 0.24f
+        canvas.drawLine(cx, shoulderY, cx - aw, shoulderY + h * 0.06f, mainPaint)
+        canvas.drawLine(cx - aw, shoulderY + h * 0.06f, cx - aw * 0.6f, shoulderY + h * 0.18f, mainPaint)
+        canvas.drawLine(cx, shoulderY, cx + aw * 0.9f, shoulderY + h * 0.06f, mainPaint)
+        canvas.drawLine(cx + aw * 0.9f, shoulderY + h * 0.06f, cx + aw * 0.5f, shoulderY + h * 0.18f, mainPaint)
 
         // Legs tucked
-        val legTuckY = hipY + h * 0.22f * tuck
-        val legOutX  = w * 0.28f * tuck
+        val lx = h * 0.22f * tuck
+        val ldy = h * 0.22f * tuck
         // Left
-        canvas.drawLine(cx + leanX, hipY, cx + leanX - legOutX, legTuckY, bodyPaint())
-        canvas.drawLine(cx + leanX - legOutX, legTuckY, cx + leanX - legOutX * 0.4f, hipY + h * 0.42f, bodyPaint())
+        canvas.drawLine(cx, hipY, cx - lx, hipY + ldy, mainPaint)
+        canvas.drawLine(cx - lx, hipY + ldy, cx - lx * 0.35f, hipY + h * 0.46f, mainPaint)
         // Right
-        canvas.drawLine(cx + leanX, hipY, cx + leanX + legOutX, legTuckY, bodyPaint())
-        canvas.drawLine(cx + leanX + legOutX, legTuckY, cx + leanX + legOutX * 0.4f, hipY + h * 0.42f, bodyPaint())
+        canvas.drawLine(cx, hipY, cx + lx, hipY + ldy, mainPaint)
+        canvas.drawLine(cx + lx, hipY + ldy, cx + lx * 0.35f, hipY + h * 0.46f, mainPaint)
     }
 
     // ── Slide pose ────────────────────────────────────────────────────────────
 
-    private fun drawSlide(canvas: Canvas, cx: Float) {
+    private fun drawSlide(canvas: Canvas) {
         val bY    = groundY
-        val headR = w * 0.26f
-        val prog  = 1f - (slideTimer.toFloat() / GameConstants.SLIDE_DURATION_MS).coerceIn(0f, 1f)
-        // Head position slides back
-        val headX = cx - w * 0.20f - prog * w * 0.05f
-
-        canvas.drawCircle(headX, bY - h * 0.42f, headR, headFill)
-        canvas.drawCircle(headX, bY - h * 0.42f, headR, headStroke)
-
-        // Stretched spine
-        canvas.drawLine(headX + headR * 0.7f, bY - h * 0.42f,
-                        cx + w * 0.40f, bY - h * 0.14f, bodyPaint())
-
-        // Front leg sliding flat
-        canvas.drawLine(cx + w * 0.10f, bY - h * 0.14f,
-                        cx + w * 0.58f, bY - h * 0.04f, bodyPaint())
-        // Back leg bent
-        canvas.drawLine(cx + w * 0.10f, bY - h * 0.14f,
-                        cx + w * 0.38f, bY, bodyPaint())
-
+        val hdCy  = bY - h * 0.42f
+        val hdCx  = cx - h * 0.06f
+        canvas.drawCircle(hdCx, hdCy, headR, headFill)
+        canvas.drawCircle(hdCx, hdCy, headR, headRim)
+        // Spine stretched horizontal
+        val spineEndX = cx + h * 0.30f
+        val spineEndY = bY - h * 0.14f
+        canvas.drawLine(hdCx + headR * 0.6f, hdCy, spineEndX, spineEndY, mainPaint)
+        // Front leg
+        canvas.drawLine(spineEndX, spineEndY, cx + h * 0.52f, bY - h * 0.04f, mainPaint)
+        // Back leg
+        canvas.drawLine(spineEndX, spineEndY, cx + h * 0.28f, bY, mainPaint)
         // Trailing arm
-        canvas.drawLine(cx - w * 0.05f, bY - h * 0.36f,
-                        cx - w * 0.05f, bY - h * 0.08f, bodyPaint())
-        // Leading arm (out front for balance)
-        canvas.drawLine(cx + w * 0.20f, bY - h * 0.30f,
-                        cx + w * 0.52f, bY - h * 0.20f, bodyPaint())
+        canvas.drawLine(cx + h * 0.08f, bY - h * 0.28f, cx + h * 0.08f, bY - h * 0.06f, mainPaint)
+        // Leading arm forward
+        canvas.drawLine(cx + h * 0.22f, bY - h * 0.26f, cx + h * 0.50f, bY - h * 0.18f, mainPaint)
     }
 
-    // ── Death pose ────────────────────────────────────────────────────────────
+    // ── Dead pose ─────────────────────────────────────────────────────────────
 
     private fun drawDead(canvas: Canvas) {
-        val cx    = x + w / 2f
-        val headR = w * 0.28f
-        val bp    = bodyPaint(180)
-        canvas.drawCircle(cx, groundY - headR * 1.1f, headR, headFill)
-        canvas.drawCircle(cx, groundY - headR * 1.1f, headR, headStroke.also { it.alpha = 180 })
-        canvas.drawLine(cx, groundY - headR * 2.1f, cx - w * 0.1f, groundY - h * 0.45f, bp)
-        canvas.drawLine(cx - w * 0.1f, groundY - h * 0.45f, cx - w * 0.55f, groundY, bp)
-        canvas.drawLine(cx - w * 0.1f, groundY - h * 0.45f, cx + w * 0.30f, groundY - h * 0.08f, bp)
-        canvas.drawLine(cx, groundY - h * 0.65f, cx - w * 0.42f, groundY - h * 0.30f, bp)
-        canvas.drawLine(cx, groundY - h * 0.65f, cx + w * 0.35f, groundY - h * 0.25f, bp)
+        val dp = Paint(mainPaint).also { it.alpha = 180 }
+        val fy = groundY
+        canvas.drawCircle(cx, fy - headR * 1.2f, headR, headFill)
+        canvas.drawCircle(cx, fy - headR * 1.2f, headR, headRim.also { it.alpha = 180 })
+        canvas.drawLine(cx, fy - headR * 2.2f, cx - h * 0.08f, fy - h * 0.48f, dp)
+        canvas.drawLine(cx - h * 0.08f, fy - h * 0.48f, cx - h * 0.50f, fy, dp)
+        canvas.drawLine(cx - h * 0.08f, fy - h * 0.48f, cx + h * 0.28f, fy - h * 0.08f, dp)
+        canvas.drawLine(cx, fy - h * 0.66f, cx - h * 0.38f, fy - h * 0.30f, dp)
+        canvas.drawLine(cx, fy - h * 0.66f, cx + h * 0.32f, fy - h * 0.24f, dp)
     }
 
     // ── Shadow ────────────────────────────────────────────────────────────────
 
-    private fun drawShadow(canvas: Canvas, cx: Float) {
-        val airFrac = ((groundY - h - y) / (h * 2.2f)).coerceIn(0f, 1f)
-        val sw2 = w * 0.42f * (1f - airFrac * 0.72f)
-        shadowPaint.alpha = (100 - (airFrac * 85).toInt()).coerceIn(15, 100)
-        canvas.drawOval(RectF(cx - sw2, groundY + 1f, cx + sw2, groundY + 7f), shadowPaint)
+    private fun drawShadow(canvas: Canvas) {
+        val airFrac = ((groundY - h - y) / (h * 2f)).coerceIn(0f, 1f)
+        val sw2 = h * 0.24f * (1f - airFrac * 0.75f)
+        shadowPaint.alpha = (90 - (airFrac * 75).toInt()).coerceIn(12, 90)
+        canvas.drawOval(RectF(cx - sw2, groundY + 1f, cx + sw2, groundY + 6f), shadowPaint)
     }
 
     // ── Double-jump burst ─────────────────────────────────────────────────────
 
-    private fun drawDoubleJumpEffect(canvas: Canvas, cx: Float) {
-        val t     = doubleJumpFlash / 0.30f                        // 1→0
-        val alpha = (t * 255).toInt().coerceIn(0, 255)
-        val r     = w * (1.2f + (1f - t) * 2.8f)
+    private fun drawBurst(canvas: Canvas) {
+        val t     = (doubleJumpFlash / 0.30f).coerceIn(0f, 1f)
+        val alpha = (t * 255).toInt()
+        val r     = h * 0.30f + (1f - t) * h * 1.0f
 
-        doubleJumpRingPaint.alpha = alpha
-        canvas.drawCircle(cx, y + h * 0.5f, r, doubleJumpRingPaint)
+        burstPaint.alpha = alpha
+        canvas.drawCircle(cx, y + h * 0.50f, r, burstPaint)
+        burstPaint.alpha = (alpha * 0.5f).toInt()
+        canvas.drawCircle(cx, y + h * 0.50f, r * 0.55f, burstPaint)
 
-        // Inner smaller ring
-        doubleJumpRingPaint.alpha = (alpha * 0.5f).toInt()
-        canvas.drawCircle(cx, y + h * 0.5f, r * 0.55f, doubleJumpRingPaint)
-
-        // Trailing streaks
-        val streakLen = w * (0.8f + (1f - t) * 3f)
+        val len = h * 0.4f + (1f - t) * h * 1.2f
         for (i in -1..1) {
-            trailPaint.alpha = (alpha * 0.55f).toInt()
-            canvas.drawLine(
-                cx - w * 0.5f - streakLen, y + h * (0.4f + i * 0.12f),
-                cx - w * 0.5f,             y + h * (0.4f + i * 0.12f),
-                trailPaint
-            )
+            trailPaint.alpha = (alpha * 0.5f).toInt()
+            canvas.drawLine(cx - h * 0.25f - len, y + h * (0.4f + i * 0.10f),
+                            cx - h * 0.25f,        y + h * (0.4f + i * 0.10f), trailPaint)
         }
     }
 
-    fun die()        { state = PlayerState.DEAD }
-    fun isOnGround() = y >= groundY - h - 2f
+    fun die() { state = PlayerState.DEAD }
 }

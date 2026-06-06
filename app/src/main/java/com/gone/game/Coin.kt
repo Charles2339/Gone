@@ -6,6 +6,7 @@ import android.graphics.Paint
 import android.graphics.RadialGradient
 import android.graphics.RectF
 import android.graphics.Shader
+import android.graphics.Typeface
 import kotlin.math.sin
 
 enum class CoinLane { GROUND, MID, HIGH }
@@ -13,108 +14,107 @@ enum class CoinLane { GROUND, MID, HIGH }
 class Coin(screenW: Int, screenH: Int, lane: CoinLane = CoinLane.entries.random()) {
 
     private val groundY = screenH - screenH * GameConstants.GROUND_HEIGHT_FRAC
-    private val radius  = screenH * 0.030f
+    private val radius  = screenH * 0.028f
 
-    var x = screenW.toFloat() + radius
+    var x = screenW.toFloat() + radius * 2f
     val y: Float = when (lane) {
-        CoinLane.GROUND -> groundY - radius * 2.2f           // just above ground
-        CoinLane.MID    -> groundY - screenH * 0.22f         // mid-air (single jump)
-        CoinLane.HIGH   -> groundY - screenH * 0.36f         // double-jump height
+        CoinLane.GROUND -> groundY - radius * 2.4f
+        CoinLane.MID    -> groundY - screenH * 0.20f
+        CoinLane.HIGH   -> groundY - screenH * 0.33f
     }
 
-    private var collected = false
-    private var collectAnim = 0f   // counts up after collection for pop effect
-    private var pulse = 0f         // drives the idle glow pulse
+    private var collected   = false
+    private var collectAnim = 0f
+    private var pulse       = 0f
 
     // ── Paints ────────────────────────────────────────────────────────────────
     private val fillPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         style = Paint.Style.FILL
-        color = Color.parseColor("#FFD600")
     }
-    private val outerGlowPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+    private val glowPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         style = Paint.Style.STROKE
-        strokeWidth = radius * 0.55f
-        color = Color.parseColor("#55FFD600")
+        strokeWidth = radius * 0.60f
+        color = Color.parseColor("#66FFD600")
     }
     private val rimPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         style = Paint.Style.STROKE
-        strokeWidth = radius * 0.25f
-        color = Color.parseColor("#FFF176")
+        strokeWidth = radius * 0.22f
+        color = Color.parseColor("#FFFFFF88")
     }
-    private val textPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Color.parseColor("#020818")
+    private val symbolPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = Color.parseColor("#7A5C00")
         textAlign = Paint.Align.CENTER
-        typeface = android.graphics.Typeface.DEFAULT_BOLD
-        textSize = radius * 1.1f
+        typeface = Typeface.DEFAULT_BOLD
+        style = Paint.Style.FILL
     }
-    private val collectPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Color.parseColor("#FFD600")
-        style  = Paint.Style.FILL
+    private val burstPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.STROKE
+        strokeCap = Paint.Cap.ROUND
     }
 
     // ── Update ────────────────────────────────────────────────────────────────
 
-    fun move(dx: Float) { if (!collected) x -= dx }
+    fun move(dx: Float)  { if (!collected) x -= dx }
 
     fun collect() { if (!collected) { collected = true; collectAnim = 0f } }
 
     fun update(dt: Float) {
-        pulse = (pulse + dt * 3.5f) % (GameConstants.TWO_PI)
-        if (collected) collectAnim = (collectAnim + dt * 5f).coerceAtMost(1f)
+        pulse = (pulse + dt * 4.0f) % GameConstants.TWO_PI
+        if (collected) collectAnim = (collectAnim + dt * 4.5f).coerceAtMost(1f)
     }
 
-    fun isCollected()  = collected && collectAnim >= 1f
-    fun isOffScreen()  = !collected && x < -radius * 3
+    fun isFullyDone()  = collected && collectAnim >= 1f
+    fun isOffScreen()  = !collected && x < -radius * 4f
 
-    fun getHitbox() = RectF(x - radius * 1.1f, y - radius * 1.1f, x + radius * 1.1f, y + radius * 1.1f)
+    /** Generous hitbox — 2.5× visual radius so fast-moving coins are never missed */
+    fun getHitbox() = RectF(x - radius * 2.5f, y - radius * 2.5f,
+                             x + radius * 2.5f, y + radius * 2.5f)
 
     // ── Draw ──────────────────────────────────────────────────────────────────
 
     fun draw(canvas: Canvas) {
-        if (collected) {
-            drawCollect(canvas)
-            return
-        }
+        if (collected) { drawCollect(canvas); return }
 
-        val pulseFactor = (sin(pulse) * 0.12f + 1f)
+        val p = sin(pulse).toFloat() * 0.12f + 1f   // 0.88..1.12 pulse scale
 
         // Outer glow halo
-        outerGlowPaint.alpha = (80 + sin(pulse).toFloat() * 40).toInt().coerceIn(40, 120)
-        canvas.drawCircle(x, y, radius * pulseFactor * 1.5f, outerGlowPaint)
+        glowPaint.alpha = (60 + sin(pulse).toFloat() * 35).toInt().coerceIn(25, 95)
+        canvas.drawCircle(x, y, radius * p * 1.55f, glowPaint)
 
-        // Gradient fill (bright top, darker bottom)
+        // Gradient fill
         fillPaint.shader = RadialGradient(
-            x - radius * 0.3f, y - radius * 0.4f,
-            radius * 1.1f,
-            intArrayOf(Color.parseColor("#FFEE58"), Color.parseColor("#F9A825")),
+            x - radius * 0.30f, y - radius * 0.38f, radius * p * 1.05f,
+            intArrayOf(Color.parseColor("#FFEE58"), Color.parseColor("#FFA000")),
             null, Shader.TileMode.CLAMP
         )
-        canvas.drawCircle(x, y, radius * pulseFactor, fillPaint)
+        canvas.drawCircle(x, y, radius * p, fillPaint)
 
-        // Rim highlight
-        canvas.drawCircle(x, y, radius * pulseFactor, rimPaint)
+        // Rim
+        canvas.drawCircle(x, y, radius * p, rimPaint)
 
-        // ¢ / star symbol
-        canvas.drawText("✦", x, y + radius * 0.38f, textPaint)
+        // ✦ symbol
+        symbolPaint.textSize = radius * 1.05f
+        canvas.drawText("✦", x, y + radius * 0.36f, symbolPaint)
     }
 
     private fun drawCollect(canvas: Canvas) {
-        // Expanding fade-out ring
-        val t = collectAnim
-        collectPaint.alpha = ((1f - t) * 200).toInt().coerceIn(0, 200)
-        val r = radius * (1f + t * 2.5f)
-        collectPaint.style = Paint.Style.STROKE
-        collectPaint.strokeWidth = radius * 0.4f * (1f - t)
-        canvas.drawCircle(x, y - t * radius * 1.5f, r, collectPaint)
+        val t     = collectAnim   // 0→1
+        val alpha = ((1f - t) * 230).toInt().coerceIn(0, 230)
 
-        // "+1" text floating upward
+        // Expanding ring
+        burstPaint.color       = Color.parseColor("#FFD600")
+        burstPaint.strokeWidth = radius * 0.5f * (1f - t * 0.7f)
+        burstPaint.alpha       = alpha
+        canvas.drawCircle(x, y - t * radius, radius * (1f + t * 2.2f), burstPaint)
+
+        // "+1" floating up
         val tp = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            color = Color.parseColor("#FFD600")
+            color     = Color.parseColor("#FFD600")
             textAlign = Paint.Align.CENTER
-            typeface = android.graphics.Typeface.DEFAULT_BOLD
-            textSize = radius * 1.4f
-            alpha = ((1f - t) * 255).toInt().coerceIn(0, 255)
+            typeface  = Typeface.DEFAULT_BOLD
+            textSize  = radius * 1.5f
+            this.alpha = alpha
         }
-        canvas.drawText("+1", x, y - radius * 2f - t * radius * 3f, tp)
+        canvas.drawText("+1", x, y - radius * 2.2f - t * radius * 2.8f, tp)
     }
 }
