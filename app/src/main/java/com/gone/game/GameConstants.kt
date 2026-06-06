@@ -2,8 +2,9 @@ package com.gone.game
 
 object GameConstants {
     // Physics
-    const val GRAVITY = 1800f          // px/s²
-    const val JUMP_VELOCITY = -900f    // px/s  (negative = up)
+    const val GRAVITY = 1800f              // px/s²
+    const val JUMP_VELOCITY = -580f        // px/s — single jump (previously -900, now ~half)
+    const val DOUBLE_JUMP_VELOCITY = -620f // px/s — second jump in air (reaches old single height)
     const val SLIDE_DURATION_MS = 600L
 
     // Speed progression (px/s)
