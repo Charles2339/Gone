@@ -8,7 +8,7 @@ class GameThread(
     private val gameView: GameView
 ) : Thread() {
 
-    var running = true
+    @Volatile var running = true
     private val targetMs = 1000L / GameConstants.TARGET_FPS
 
     override fun run() {
@@ -23,12 +23,18 @@ class GameThread(
 
             var canvas: Canvas? = null
             try {
-                canvas = surfaceHolder.lockCanvas()
+                canvas = surfaceHolder.lockCanvas() ?: continue
                 synchronized(surfaceHolder) {
-                    if (canvas != null) gameView.draw(canvas)
+                    gameView.draw(canvas)
                 }
+            } catch (e: Exception) {
+                // Surface may be temporarily unavailable; skip frame
             } finally {
-                if (canvas != null) surfaceHolder.unlockCanvasAndPost(canvas)
+                try {
+                    if (canvas != null) surfaceHolder.unlockCanvasAndPost(canvas)
+                } catch (e: Exception) {
+                    // Ignore unlock errors when surface is being destroyed
+                }
             }
 
             val elapsed = (System.nanoTime() - now) / 1_000_000

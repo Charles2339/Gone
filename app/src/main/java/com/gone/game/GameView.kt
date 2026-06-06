@@ -8,19 +8,23 @@ import android.view.SurfaceView
 import kotlin.math.max
 import kotlin.random.Random
 
-enum class GameState { MENU, PLAYING, PAUSED, GAME_OVER }
+enum class GameState { PLAYING, PAUSED, GAME_OVER }
 
 class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback {
 
     private var gameThread: GameThread? = null
     private val prefs = GamePrefs(context)
 
+    // Surface lifecycle flag — nothing touches game objects until this is true
+    @Volatile private var surfaceReady = false
+
     private var screenW = 0
     private var screenH = 0
 
-    private lateinit var player: Player
-    private lateinit var background: Background
+    private var player: Player? = null
+    private var background: Background? = null
     private val obstacles = mutableListOf<Obstacle>()
+    private val particles = mutableListOf<Particle>()
 
     private var gameState = GameState.PLAYING
     private var speed = GameConstants.BASE_SPEED
@@ -32,14 +36,11 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback 
     private var nextObstacleMs = 1500L
     private var obstacleTimer = 0L
 
-    // Particles
-    private val particles = mutableListOf<Particle>()
-
-    // Touch zones
+    // Touch tracking
     private var touchStartY = 0f
     private var touchStartTime = 0L
 
-    // HUD Paints
+    // ── Paints ────────────────────────────────────────────────────────────────
     private val scorePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         color = Color.WHITE
         typeface = Typeface.DEFAULT_BOLD
@@ -73,17 +74,21 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback 
         strokeWidth = 2f
         style = Paint.Style.STROKE
     }
+    private val bgFallbackPaint = Paint().apply { color = Color.parseColor("#020818") }
 
     init {
         holder.addCallback(this)
         isFocusable = true
     }
 
+    // ── Surface lifecycle ─────────────────────────────────────────────────────
+
     override fun surfaceCreated(holder: SurfaceHolder) {
         screenW = width
         screenH = height
         initGame()
-        gameThread = GameThread(holder, this).also { it.start() }
+        surfaceReady = true
+        startThread()
     }
 
     override fun surfaceChanged(holder: SurfaceHolder, format: Int, width: Int, height: Int) {
@@ -92,9 +97,48 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback 
     }
 
     override fun surfaceDestroyed(holder: SurfaceHolder) {
-        gameThread?.running = false
-        gameThread?.join()
+        surfaceReady = false
+        stopThread()
     }
+
+    // ── Thread management (called only from surface callbacks + activity) ─────
+
+    private fun startThread() {
+        gameThread?.running = false  // stop any stale thread
+        gameThread = GameThread(holder, this).also { it.start() }
+    }
+
+    private fun stopThread() {
+        gameThread?.running = false
+        var retry = true
+        while (retry) {
+            try {
+                gameThread?.join()
+                retry = false
+            } catch (e: InterruptedException) {
+                // keep trying to join
+            }
+        }
+        gameThread = null
+    }
+
+    /** Called by GameActivity.onPause() */
+    fun pause() {
+        if (gameState == GameState.PLAYING) gameState = GameState.PAUSED
+        stopThread()
+    }
+
+    /** Called by GameActivity.onResume() */
+    fun resume() {
+        // Only (re)start if the surface is already ready.
+        // If not ready yet, surfaceCreated() will call startThread() shortly.
+        if (surfaceReady) {
+            if (gameState == GameState.PAUSED) gameState = GameState.PLAYING
+            startThread()
+        }
+    }
+
+    // ── Game logic ────────────────────────────────────────────────────────────
 
     private fun initGame() {
         player = Player(screenW, screenH)
@@ -110,6 +154,7 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback 
     }
 
     fun update(dt: Float) {
+        if (!surfaceReady) return
         when (gameState) {
             GameState.PLAYING -> updateGame(dt)
             else -> {}
@@ -117,18 +162,15 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback 
     }
 
     private fun updateGame(dt: Float) {
-        // Speed ramp
-        speed = (speed + GameConstants.SPEED_INCREMENT * dt).coerceAtMost(GameConstants.MAX_SPEED)
+        val p = player ?: return
+        val bg = background ?: return
 
-        // Distance & score
+        speed = (speed + GameConstants.SPEED_INCREMENT * dt).coerceAtMost(GameConstants.MAX_SPEED)
         distancePx += speed * dt
         score = (distancePx * GameConstants.METRES_PER_PX).toInt()
 
-        // Player
-        player.update(dt)
-
-        // Background
-        background.update(speed, dt)
+        p.update(dt)
+        bg.update(speed, dt)
 
         // Spawn obstacles
         obstacleTimer += (dt * 1000).toLong()
@@ -158,34 +200,42 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback 
         particles.removeAll { it.isDead() }
 
         // Collision
-        val playerBox = player.getHitbox()
+        val playerBox = p.getHitbox()
         for (obs in obstacles) {
             if (RectF.intersects(playerBox, obs.getHitbox())) {
-                player.die()
+                p.die()
                 gameState = GameState.GAME_OVER
                 highScore = score.coerceAtLeast(highScore)
                 prefs.saveHighScore(score)
-                spawnDeathParticles(player.x + player.w / 2, player.y + player.h / 2)
+                spawnDeathParticles(p.x + p.w / 2, p.y + p.h / 2)
                 break
             }
         }
     }
 
+    // ── Drawing ───────────────────────────────────────────────────────────────
+
     override fun draw(canvas: Canvas) {
         super.draw(canvas)
-        if (screenW == 0) return
 
-        background.draw(canvas)
+        val p = player
+        val bg = background
+        if (p == null || bg == null) {
+            // Surface exists but game not yet initialized — draw solid black
+            canvas.drawRect(0f, 0f, width.toFloat(), height.toFloat(), bgFallbackPaint)
+            return
+        }
 
+        bg.draw(canvas)
         obstacles.forEach { it.draw(canvas) }
-        player.draw(canvas)
+        p.draw(canvas)
         particles.forEach { it.draw(canvas) }
 
         drawHUD(canvas)
 
         when (gameState) {
             GameState.GAME_OVER -> drawGameOver(canvas)
-            GameState.PAUSED -> drawPaused(canvas)
+            GameState.PAUSED    -> drawPaused(canvas)
             else -> {}
         }
     }
@@ -196,24 +246,20 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback 
         scorePaint.textSize = textSize
         speedPaint.textSize = textSize * 0.7f
 
-        // Score box
         val scoreText = "${score}m"
         val boxW = scorePaint.measureText(scoreText) + pad * 3
         canvas.drawRoundRect(RectF(pad, pad, pad + boxW, pad + textSize + pad * 1.5f), 12f, 12f, hudBgPaint)
         canvas.drawRoundRect(RectF(pad, pad, pad + boxW, pad + textSize + pad * 1.5f), 12f, 12f, neonLinePaint)
         canvas.drawText(scoreText, pad * 2, pad + textSize, scorePaint)
 
-        // High score
+        subtitlePaint.textSize = textSize * 0.75f
+        subtitlePaint.textAlign = Paint.Align.LEFT
         val hsText = "Best: ${highScore}m"
-        val hsX = screenW - pad - scorePaint.measureText(hsText) - pad
-        canvas.drawText(hsText, hsX, pad + textSize, subtitlePaint.also { it.textAlign = Paint.Align.LEFT; it.textSize = textSize * 0.75f })
+        canvas.drawText(hsText, screenW - pad - subtitlePaint.measureText(hsText) - pad, pad + textSize, subtitlePaint)
 
-        // Speed indicator
-        val speedText = "%.0f km/h".format(speed * 0.06f)
         speedPaint.textAlign = Paint.Align.CENTER
-        canvas.drawText(speedText, screenW / 2f, pad + textSize * 0.8f, speedPaint)
+        canvas.drawText("%.0f km/h".format(speed * 0.06f), screenW / 2f, pad + textSize * 0.8f, speedPaint)
 
-        // Controls hint (early game)
         if (score < 5) {
             subtitlePaint.textSize = textSize * 0.65f
             subtitlePaint.textAlign = Paint.Align.CENTER
@@ -225,9 +271,7 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback 
 
     private fun drawGameOver(canvas: Canvas) {
         canvas.drawRect(0f, 0f, screenW.toFloat(), screenH.toFloat(), overlayPaint)
-
-        val cx = screenW / 2f
-        val cy = screenH / 2f
+        val cx = screenW / 2f; val cy = screenH / 2f
 
         titlePaint.textSize = screenH * 0.12f
         canvas.drawText("GONE", cx, cy - screenH * 0.12f, titlePaint)
@@ -236,9 +280,9 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback 
         canvas.drawText("${score}m", cx, cy + screenH * 0.01f, accentPaint)
 
         subtitlePaint.textSize = screenH * 0.04f
+        subtitlePaint.textAlign = Paint.Align.CENTER
         canvas.drawText("Best: ${highScore}m", cx, cy + screenH * 0.07f, subtitlePaint)
 
-        // Tap to restart
         subtitlePaint.textSize = screenH * 0.045f
         subtitlePaint.alpha = (200 + (System.currentTimeMillis() / 600 % 2) * 55).toInt()
         canvas.drawText("TAP TO RESTART", cx, cy + screenH * 0.18f, subtitlePaint)
@@ -250,8 +294,11 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback 
         titlePaint.textSize = screenH * 0.1f
         canvas.drawText("PAUSED", screenW / 2f, screenH / 2f, titlePaint)
         subtitlePaint.textSize = screenH * 0.045f
+        subtitlePaint.textAlign = Paint.Align.CENTER
         canvas.drawText("TAP TO RESUME", screenW / 2f, screenH / 2f + screenH * 0.1f, subtitlePaint)
     }
+
+    // ── Touch ─────────────────────────────────────────────────────────────────
 
     override fun onTouchEvent(event: MotionEvent): Boolean {
         when (event.action) {
@@ -266,43 +313,30 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback 
                 when (gameState) {
                     GameState.PLAYING -> {
                         if (dy > screenH * 0.08f && elapsed < 300) {
-                            player.slide()
+                            player?.slide()
                         } else {
-                            player.jump()
+                            player?.jump()
                         }
                     }
-                    GameState.GAME_OVER -> initGame()
-                    GameState.PAUSED -> gameState = GameState.PLAYING
-                    else -> {}
+                    GameState.GAME_OVER -> {
+                        initGame()
+                    }
+                    GameState.PAUSED -> {
+                        gameState = GameState.PLAYING
+                    }
                 }
             }
         }
         return true
     }
 
+    // ── Particles ─────────────────────────────────────────────────────────────
+
     private fun spawnDeathParticles(x: Float, y: Float) {
-        repeat(20) {
-            particles.add(Particle(x, y, isScore = false))
-        }
+        repeat(20) { particles.add(Particle(x, y, isScore = false)) }
     }
 
     private fun spawnScoreParticles(x: Float, y: Float) {
-        repeat(4) {
-            particles.add(Particle(x, y, isScore = true))
-        }
-    }
-
-    fun pause() {
-        if (gameState == GameState.PLAYING) gameState = GameState.PAUSED
-        gameThread?.running = false
-    }
-
-    fun resume() {
-        if (gameState == GameState.PAUSED) gameState = GameState.PLAYING
-        if (gameThread?.isAlive == false) {
-            gameThread = GameThread(holder, this).also { it.start() }
-        } else if (gameThread == null) {
-            gameThread = GameThread(holder, this).also { it.start() }
-        }
+        repeat(4) { particles.add(Particle(x, y, isScore = true)) }
     }
 }
